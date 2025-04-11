@@ -1,58 +1,28 @@
-const WebSocket = require('ws');
-const { handleCommand } = require('./handleCommand');
+WebSocket = require('ws'); 
+const handleCommand = require('./handleCommand');
 
-const wss = new WebSocket.Server({ port: 8080 });
+const server = http.createServer(); const wss = new WebSocket.Server({ server });
+
 const rooms = {};
-let nextId = 1;
 
-wss.on('connection', (ws) => {
-  const player = {
-    id: nextId++,
-    ws,
-    position: { x: Math.random() * 10 - 5, z: Math.random() * 10 - 5 },
-    health: 100,
-    model: 'default',
-    weapon: 'starter',
-    privilege: true
-  };
+function createRoomIfNotExists(id) { if (!rooms[id]) { rooms[id] = { id, players: {}, bullets: [] }; } return rooms[id]; }
 
-  ws.on('message', (msg) => {
-    let data;
-    try { data = JSON.parse(msg); } catch (e) { return; }
+function broadcast(room, data) { for (const player of Object.values(room.players)) { if (player.ws.readyState === WebSocket.OPEN) { player.ws.send(JSON.stringify(data)); } } }
 
-    if (data.type === 'init') {
-      player.nickname = data.nickname;
-      let room = rooms[data.roomName];
-      if (!room) {
-        room = { name: data.roomName, players: {} };
-        rooms[data.roomName] = room;
-      }
-      room.players[player.id] = player;
+wss.on('connection', ws => { const id = Math.random().toString(36).slice(2); const room = createRoomIfNotExists('default');
 
-      ws.send(JSON.stringify({ type: 'connected', id: player.id, spawnPoint: player.position }));
-      broadcast(room, { type: 'player_joined', id: player.id, nickname: player.nickname, position: player.position });
-    }
-    else if (data.type === 'command') {
-      handleCommand(data.command, player, rooms);
-    }
-  });
+const player = { id, ws, position: { x: Math.floor(Math.random() * 10), z: Math.floor(Math.random() * 10) }, health: 100, weapon: 'starter', model: 'default' };
 
-  ws.on('close', () => {
-    for (const room of Object.values(rooms)) {
-      if (room.players[player.id]) {
-        delete room.players[player.id];
-        broadcast(room, { type: 'player_left', id: player.id });
-      }
-    }
-  });
-});
+room.players[id] = player;
 
-function broadcast(room, message) {
-  for (const p of Object.values(room.players)) {
-    if (p.ws.readyState === WebSocket.OPEN) {
-      p.ws.send(JSON.stringify(message));
-    }
-  }
+ws.on('message', message => { let data; try { data = JSON.parse(message); } catch (e) { return; }
+
+if (data.type === 'command') {
+  handleCommand({ command: data.value, player, room, broadcast });
 }
 
-console.log("Server started on ws://localhost:8080");
+});
+
+ws.on('close', () => { delete room.players[id]; broadcast(room, { type: 'player_disconnected', id }); }); });
+
+server.listen(3000, () => { console.log('Server running on http://localhost:3000'); });
