@@ -1,65 +1,89 @@
-function handleCommand(command, player, rooms) {
-  const room = Object.values(rooms).find(r => r.players[player.id]);
-  if (!room) return;
+module.exports = function handleCommand({ command, player, room, broadcast }) {
+  try {
+    if (!command.startsWith('/type game:')) return;
 
-  const match = command.match(/^\/type game:?\\s*(\\w+)-player:\\s*(\\w+)(.*)/);
-  if (!match) return;
+    const content = command.slice(11, command.indexOf('{')).trim();
+    const [_, subject, actionPart] = content.split(':');
 
-  const [, target, action, rest] = match;
-  const targetPlayer = (target === 'local') ? player : Object.values(room.players).find(p => p.nickname === target);
-  if (!targetPlayer) return;
+    if (subject.trim() !== 'local-player') return;
 
-  if (['up', 'down', 'left', 'right'].includes(action)) {
-    if (action === 'up') targetPlayer.position.z -= 1;
-    if (action === 'down') targetPlayer.position.z += 1;
-    if (action === 'left') targetPlayer.position.x -= 1;
-    if (action === 'right') targetPlayer.position.x += 1;
+    const [action, ...params] = actionPart.trim().split(/\s+/);
 
-    broadcast(room, {
-      type: 'update_position',
-      id: targetPlayer.id,
-      position: targetPlayer.position
-    });
-  }
+    if (!room.players[player.id]) return;
+    const playerData = room.players[player.id];
 
-  if (action === '-switch' && rest.includes('weapon')) {
-    const match = rest.match(/id\\s*=\\s*"(.+?)"/);
-    if (match) {
-      targetPlayer.weapon = match[1];
+    switch (action) {
+      case 'up':
+        playerData.position.z -= 1;
+        break;
+      case 'down':
+        playerData.position.z += 1;
+        break;
+      case 'left':
+        playerData.position.x -= 1;
+        break;
+      case 'right':
+        playerData.position.x += 1;
+        break;
+      case 'shoot': {
+        const bulletId = Math.random().toString(36).slice(2);
+        const bullet = {
+          id: bulletId,
+          ownerId: player.id,
+          x: playerData.position.x,
+          z: playerData.position.z - 1,
+          dir: { x: 0, z: -1 },
+          alive: true
+        };
+        room.bullets = room.bullets || [];
+        room.bullets.push(bullet);
+        broadcast(room, { type: 'spawn_bullet', bullet });
+
+        setTimeout(() => {
+          bullet.x += bullet.dir.x * 3;
+          bullet.z += bullet.dir.z * 3;
+
+          for (const p of Object.values(room.players)) {
+            if (p.id !== player.id &&
+                Math.abs(p.position.x - bullet.x) < 1 &&
+                Math.abs(p.position.z - bullet.z) < 1) {
+              p.health -= 25;
+              broadcast(room, { type: 'update_health', id: p.id, value: p.health });
+              broadcast(room, { type: 'bullet_hit', target: p.id, by: player.id });
+            }
+          }
+
+          broadcast(room, { type: 'destroy_bullet', id: bulletId });
+          bullet.alive = false;
+        }, 500);
+        break;
+      }
+      case '-switch': {
+        const full = actionPart + ' ' + params.join(' ');
+        const matchWeapon = full.match(/parameter=\s*weapon id="([^"]+)"/);
+        const matchModel = full.match(/parameter=\s*model id="([^"]+)"/);
+
+        if (matchWeapon) {
+          playerData.weapon = matchWeapon[1];
+          broadcast(room, { type: 'update_weapon', id: player.id, weapon: matchWeapon[1] });
+        } else if (matchModel) {
+          playerData.model = matchModel[1];
+          broadcast(room, { type: 'update_model', id: player.id, model: matchModel[1] });
+        }
+        break;
+      }
+      case '-set': {
+        const matchHealth = actionPart.match(/parameter=\s*health value=(\d+)/);
+        if (matchHealth) {
+          playerData.health = parseInt(matchHealth[1]);
+          broadcast(room, { type: 'update_health', id: player.id, value: playerData.health });
+        }
+        break;
+      }
     }
-  }
 
-  if (action === '-switch' && rest.includes('model')) {
-    const match = rest.match(/id\\s*=\\s*"(.+?)"/);
-    if (match) {
-      targetPlayer.model = match[1];
-      broadcast(room, {
-        type: 'update_model',
-        id: targetPlayer.id,
-        model: targetPlayer.model
-      });
-    }
+    broadcast(room, { type: 'update_position', id: player.id, position: playerData.position });
+  } catch (err) {
+    console.error('handleCommand error:', err);
   }
-
-  if (action === '-set' && rest.includes('health')) {
-    const match = rest.match(/value\\s*=\\s*(\\d+)/);
-    if (match) {
-      targetPlayer.health = parseInt(match[1]);
-      broadcast(room, {
-        type: 'update_health',
-        id: targetPlayer.id,
-        value: targetPlayer.health
-      });
-    }
-  }
-}
-
-function broadcast(room, message) {
-  for (const p of Object.values(room.players)) {
-    if (p.ws.readyState === 1) {
-      p.ws.send(JSON.stringify(message));
-    }
-  }
-}
-
-module.exports = { handleCommand };
+};
